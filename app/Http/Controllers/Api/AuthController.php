@@ -162,6 +162,8 @@ class AuthController extends Controller
             'code' => 'required|string|digits:6',
             'name' => 'required|string|max:255',
             'password' => 'required|string|min:8|confirmed',
+            'birthday' => 'nullable|date|before_or_equal:today',
+            'phone_number' => 'nullable|string|max:20',
         ]);
 
         $cacheKey = 'registration_code_for_' . $request->email;
@@ -181,6 +183,8 @@ class AuthController extends Controller
             'name' => $request->name,
             'email' => $request->email,
             'password' => Hash::make($request->password),
+            'birthday' => $request->birthday,
+            'phone_number' => $request->phone_number,
             'email_verified_at' => now(), // メール確認済みとして設定
         ]);
 
@@ -201,12 +205,16 @@ class AuthController extends Controller
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users,email,' . $request->user()->id,
+            'birthday' => 'nullable|date|before_or_equal:today',
+            'phone_number' => 'nullable|string|max:20',
         ]);
 
         $user = $request->user();
         $user->update([
             'name' => $request->name,
             'email' => $request->email,
+            'birthday' => $request->birthday,
+            'phone_number' => $request->phone_number,
         ]);
 
         return response()->json($user);

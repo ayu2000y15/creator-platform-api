@@ -26,6 +26,7 @@ class User extends Authenticatable
         'password',
         'google_id',
         'phone_number',
+        'birthday',
         'two_factor_confirmed_at',
         'email_two_factor_enabled',
     ];
@@ -52,6 +53,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'two_factor_confirmed_at' => 'datetime',
+            'birthday' => 'date',
             'password' => 'hashed',
             'email_two_factor_enabled' => 'boolean',
         ];
