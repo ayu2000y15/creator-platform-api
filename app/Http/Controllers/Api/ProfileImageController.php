@@ -27,25 +27,28 @@ class ProfileImageController extends Controller
             // ファイル名を生成
             $filename = 'profile_' . $user->id . '_' . time() . '.' . $image->getClientOriginalExtension();
 
-            // ローカルストレージに保存
-            $path = $image->storeAs('profile-images', $filename, 'public');
+            // S3にファイルを保存 (ディスクを'profile_images'に指定)
+            // 'profile-images' ディレクトリに保存されます
+            $path = $image->storeAs('', $filename, 'profile_images');
 
-            // URLを生成
-            $imageUrl = Storage::url($path);
+            // S3のURLを取得
+            $imageUrl = Storage::disk('profile_images')->url($path);
+
+            $normalizedUrl = str_replace('%5C', '/', $imageUrl);
 
             // ユーザーのプロフィール画像を更新
-            $user->update(['profile_image' => $imageUrl]);
+            $user->update(['profile_image' => $normalizedUrl]);
 
-            Log::info('Profile image uploaded successfully', [
+            Log::info('Profile image uploaded successfully to S3', [
                 'user_id' => $user->id,
                 'filename' => $filename,
                 'path' => $path,
-                'url' => $imageUrl
+                'url' => $normalizedUrl
             ]);
 
             return response()->json([
                 'message' => 'プロフィール画像をアップロードしました',
-                'image_url' => $imageUrl
+                'image_url' => $normalizedUrl
             ]);
         } catch (\Exception $e) {
             Log::error('Profile image upload failed', [
@@ -70,7 +73,7 @@ class ProfileImageController extends Controller
             // ユーザーのプロフィール画像をクリア
             $user->update(['profile_image' => null]);
 
-            Log::info('Profile image deleted successfully', [
+            Log::info('Profile image deleted successfully from S3', [
                 'user_id' => $user->id
             ]);
 
@@ -92,14 +95,25 @@ class ProfileImageController extends Controller
     private function deleteOldProfileImage($user)
     {
         if ($user->profile_image) {
-            // URLからパスを抽出
-            $path = str_replace('/storage/', '', $user->profile_image);
+            // S3の完全なURL (例: https://.../profile-images/image.jpg)
+            $fullUrlPath = parse_url($user->profile_image, PHP_URL_PATH);
 
-            if (Storage::disk('public')->exists($path)) {
-                Storage::disk('public')->delete($path);
-                Log::info('Old profile image deleted', [
+            // 先頭のスラッシュを削除してフルのパスを取得 (例: profile-images/image.jpg)
+            $fullPath = ltrim($fullUrlPath, '/');
+
+            // 'profile_images'ディスクのルートパス('profile-images/')を削除し、
+            // ファイル名のみの相対パスを取得する (例: image.jpg)
+            $relativePath = str_replace('profile-images/', '', $fullPath);
+
+            // 正しい相対パスでファイルの存在を確認
+            if (Storage::disk('profile_images')->exists($relativePath)) {
+
+                // ファイルを削除
+                Storage::disk('profile_images')->delete($relativePath);
+
+                Log::info('Old profile image deleted from S3', [
                     'user_id' => $user->id,
-                    'path' => $path
+                    'path' => $relativePath
                 ]);
             }
         }

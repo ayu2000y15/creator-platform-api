@@ -70,8 +70,8 @@ return [
             'endpoint' => env('AWS_ENDPOINT'),
             'use_path_style_endpoint' => env('AWS_USE_PATH_STYLE_ENDPOINT', false),
             'root' => 'profile-images',
-            'visibility' => 'public',
-            'throw' => false,
+            //'visibility' => 'public',
+            'throw' => true,
             'report' => false,
         ],
 
