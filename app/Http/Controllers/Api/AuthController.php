@@ -228,16 +228,24 @@ class AuthController extends Controller
         $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|string|email|max:255|unique:users,email,' . $request->user()->id,
+            'username' => 'nullable|string|max:50|unique:users,username,' . $request->user()->id . '|regex:/^[a-zA-Z0-9_]+$/',
+            'bio' => 'nullable|string|max:300',
             'birthday' => 'nullable|date|before_or_equal:today',
+            'birthday_visibility' => 'nullable|in:full,month_day,hidden',
             'phone_number' => 'nullable|string|max:20',
+            'profile_image' => 'nullable|string|max:500', // URL形式のバリデーションは後で追加
         ]);
 
         $user = $request->user();
         $user->update([
             'name' => $request->name,
             'email' => $request->email,
+            'username' => $request->username,
+            'bio' => $request->bio,
             'birthday' => $request->birthday,
+            'birthday_visibility' => $request->birthday_visibility ?? 'hidden',
             'phone_number' => $request->phone_number,
+            'profile_image' => $request->profile_image,
         ]);
 
         return response()->json($user);
@@ -314,7 +322,7 @@ class AuthController extends Controller
         }
 
         if ($user->markEmailAsVerified()) {
-            event(new Verified($user));
+            // event(new Verified($user)); // MustVerifyEmailを実装していないためコメントアウト
         }
 
         return response()->json(['message' => 'メールアドレスの認証が完了しました。']);

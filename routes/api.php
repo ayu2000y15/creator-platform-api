@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Auth\RegisteredUserController;
+use App\Http\Controllers\Api\ProfileImageController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\TwoFactorAuthController;
@@ -47,6 +48,10 @@ Route::middleware('auth:sanctum')->group(function () {
     // プロフィール関連のルートを追加
     Route::put('/user/profile', [AuthController::class, 'updateProfile']);
     Route::put('/user/password', [AuthController::class, 'changePassword']);
+
+    // プロフィール画像関連
+    Route::post('/user/profile-image', [ProfileImageController::class, 'upload']);
+    Route::delete('/user/profile-image', [ProfileImageController::class, 'delete']);
 
     // メール認証関連
     Route::get('/email/verification-notification', [AuthController::class, 'checkEmailVerification']);

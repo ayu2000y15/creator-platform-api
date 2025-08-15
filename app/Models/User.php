@@ -29,6 +29,10 @@ class User extends Authenticatable
         'birthday',
         'two_factor_confirmed_at',
         'email_two_factor_enabled',
+        'profile_image',
+        'username',
+        'bio',
+        'birthday_visibility',
     ];
 
     /**

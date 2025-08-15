@@ -11,10 +11,12 @@
     "require": {
         "php": "^8.2",
         "bacon/bacon-qr-code": "^3.0",
+        "intervention/image": "^3.11",
         "laravel/framework": "^12.0",
         "laravel/sanctum": "^4.2",
         "laravel/socialite": "^5.23",
         "laravel/tinker": "^2.10.1",
+        "league/flysystem-aws-s3-v3": "^3.29",
         "pragmarx/google2fa-laravel": "^2.3"
     },
     "require-dev": {
