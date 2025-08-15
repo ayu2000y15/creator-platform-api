@@ -112,15 +112,38 @@ class AuthController extends Controller
             return response()->json(['message' => 'ユーザーが見つかりません。'], 404);
         }
 
-        // 二段階認証コードの検証処理
-        $google2fa = new Google2FA();
-        $valid = $google2fa->verifyKey(
-            decrypt($user->two_factor_secret),
-            $request->code
-        );
+        $code = $request->code;
+        $isBackupCode = strlen($code) >= 8;
 
-        if (!$valid) {
-            return response()->json(['message' => '認証コードが正しくありません。'], 422);
+        if ($isBackupCode) {
+            // バックアップコード認証
+            if (!$user->two_factor_recovery_codes) {
+                return response()->json(['message' => 'バックアップコードが設定されていません。'], 422);
+            }
+
+            $codes = decrypt($user->two_factor_recovery_codes);
+            if (!is_array($codes)) {
+                $codes = [];
+            }
+            $index = array_search($code, $codes);
+            if ($index === false) {
+                return response()->json(['message' => 'バックアップコードが正しくありません。'], 422);
+            }
+            // 使ったコードは削除
+            unset($codes[$index]);
+            $user->forceFill([
+                'two_factor_recovery_codes' => encrypt(array_values($codes))
+            ])->save();
+        } else {
+            // 認証アプリの6桁コード
+            $google2fa = new Google2FA();
+            $valid = $google2fa->verifyKey(
+                decrypt($user->two_factor_secret),
+                $code
+            );
+            if (!$valid) {
+                return response()->json(['message' => '認証コードが正しくありません。'], 422);
+            }
         }
 
         $token = $user->createToken('api-token')->plainTextToken;
