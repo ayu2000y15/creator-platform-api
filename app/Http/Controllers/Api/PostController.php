@@ -12,6 +12,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Carbon\Carbon;
+use Illuminate\Pagination\CursorPaginator;
 
 class PostController extends Controller
 {
@@ -120,102 +121,86 @@ class PostController extends Controller
 
     private function getFollowingFeed(Request $request, $user)
     {
-        // フォロー中のユーザーIDを取得
+        // フォロー中のユーザーIDを取得 (自分も含む)
         $followingIds = $user->following()->pluck('users.id')->toArray();
-        $followingIds[] = $user->id; // 自分の投稿も含める
+        $followingIds[] = $user->id;
 
-        // 1. 通常の投稿（ショートを除外）
-        $postsQuery = Post::with(['user', 'media', 'quotedPost.user', 'quotedPost.media', 'quotedReply.user', 'quotedReply.post.user'])
-            ->withCount(['likes', 'sparks', 'bookmarks', 'replies', 'quotes', 'views'])
+        // --- タイムライン構築ロジック ---
+        // 1. フォロー中のユーザーによる「通常の投稿」を取得するクエリ
+        $postsQuery = DB::table('posts')
             ->whereIn('user_id', $followingIds)
-            ->where('content_type', '!=', 'short_video'); // ショートを除外
-
-        // 通常の投稿を取得
-        $posts = $postsQuery->orderBy('created_at', 'desc')->take(50)->get();
-
-        // 通常の投稿にリポスト情報を追加
-        foreach ($posts as $post) {
-            $post->is_repost = false;
-            $post->repost_user = null;
-            $post->repost_created_at = $post->created_at;
-        }
-
-        // 2. スパークされた投稿を追加
-        $sparkedEntries = collect();
-
-        // フォロー中のユーザーのスパークアクションを取得
-        $recentSparks = DB::table('post_actions')
-            ->join('posts', 'post_actions.post_id', '=', 'posts.id')
-            ->join('users', 'post_actions.user_id', '=', 'users.id')
-            ->where('post_actions.action_type', 'spark')
-            ->where('posts.content_type', '!=', 'short_video')
-            ->whereIn('post_actions.user_id', $followingIds)
+            ->where('content_type', '!=', 'short_video')
             ->select(
-                'posts.id as post_id',
-                'post_actions.user_id as repost_user_id',
-                'users.name as repost_user_name',
-                'users.username as repost_user_username',
-                'users.profile_image as repost_user_profile_image',
-                'post_actions.created_at as repost_created_at'
-            )
-            ->orderBy('post_actions.created_at', 'desc')
-            ->take(50)
-            ->get();
+                'id as post_id',
+                DB::raw('NULL as repost_user_id'), // スパークではないのでrepostユーザーはNULL
+                'created_at as activity_at'      // 活動日時は投稿の作成日時
+            );
 
-        foreach ($recentSparks as $spark) {
-            $post = Post::with(['user', 'media', 'quotedPost.user', 'quotedPost.media', 'quotedReply.user', 'quotedReply.post.user'])
-                ->withCount(['likes', 'sparks', 'bookmarks', 'replies', 'quotes', 'views'])
-                ->find($spark->post_id);
+        // 2. フォロー中のユーザーによる「スパーク」を取得するクエリ
+        $sparksQuery = DB::table('post_actions')
+            ->join('posts', 'post_actions.post_id', '=', 'posts.id')
+            ->where('post_actions.action_type', 'spark')
+            ->whereIn('post_actions.user_id', $followingIds)
+            ->where('posts.content_type', '!=', 'short_video')
+            ->select(
+                'post_actions.post_id',
+                'post_actions.user_id as repost_user_id', // スパークしたユーザーのID
+                'post_actions.created_at as activity_at'  // 活動日時はスパークされた日時
+            );
 
-            if ($post) {
-                $post->is_repost = true;
-                $post->repost_user = (object) [
-                    'id' => $spark->repost_user_id,
-                    'name' => $spark->repost_user_name,
-                    'username' => $spark->repost_user_username,
-                    'profile_image' => $spark->repost_user_profile_image,
-                ];
-                $post->repost_created_at = $spark->repost_created_at;
+        // 3. 2つのクエリを結合し、活動日時順に並べ替え、ページネーションを適用
+        $timelineActivities = $sparksQuery
+            ->union($postsQuery)
+            ->orderBy('activity_at', 'desc')
+            ->cursorPaginate(20);
 
-                $sparkedEntries->push($post);
+        // 4. タイムラインの投稿IDとリポストユーザーIDを取得
+        $postIds = $timelineActivities->pluck('post_id')->unique()->toArray();
+        $repostUserIds = $timelineActivities->whereNotNull('repost_user_id')->pluck('repost_user_id')->unique()->toArray();
+
+        // 5. 必要なデータをまとめて取得（N+1問題の防止）
+        $postsById = Post::with(['user', 'media', 'quotedPost.user', 'quotedPost.media', 'quotedReply.user', 'quotedReply.post.user'])
+            ->withCount(['likes', 'sparks', 'bookmarks', 'replies', 'quotes', 'views'])
+            ->whereIn('id', $postIds)
+            ->get()
+            ->keyBy('id');
+
+        $repostUsersById = User::whereIn('id', $repostUserIds)->get()->keyBy('id');
+
+        $userActions = DB::table('post_actions')
+            ->where('user_id', $user->id)
+            ->whereIn('post_id', $postIds)
+            ->whereIn('action_type', ['like', 'spark', 'bookmark'])
+            ->get()
+            ->groupBy('post_id');
+
+        // 6. 最終的なフィードデータを構築
+        $feedItems = $timelineActivities->map(function ($activity) use ($postsById, $repostUsersById, $userActions) {
+            $post = $postsById->get($activity->post_id);
+            if (!$post) {
+                return null;
             }
-        }
 
-        // 投稿とスパークエントリを統合してソート
-        $allPosts = $posts->concat($sparkedEntries)->sortByDesc(function ($post) {
-            return $post->is_repost ? $post->repost_created_at : $post->created_at;
-        })->take(20);
+            $feedItem = clone $post; // 元のPostオブジェクトを変更しないようにクローン
 
-        // ユーザーのアクション状態を効率的に取得
-        if ($user) {
-            $postIds = $allPosts->pluck('id')->toArray();
+            // ログインユーザーのアクション状態を設定
+            $actions = $userActions->get($feedItem->id, collect());
+            $feedItem->is_liked = $actions->contains('action_type', 'like');
+            $feedItem->is_sparked = $actions->contains('action_type', 'spark');
+            $feedItem->is_bookmarked = $actions->contains('action_type', 'bookmark');
 
-            // 一括でアクション状態を取得
-            $userActions = DB::table('post_actions')
-                ->where('user_id', $user->id)
-                ->whereIn('post_id', $postIds)
-                ->whereIn('action_type', ['like', 'spark', 'bookmark'])
-                ->select('post_id', 'action_type')
-                ->get()
-                ->groupBy('post_id');
+            // リポスト（スパーク）情報を設定
+            $feedItem->is_repost = !is_null($activity->repost_user_id);
+            $feedItem->repost_user = $feedItem->is_repost ? $repostUsersById->get($activity->repost_user_id) : null;
+            $feedItem->repost_created_at = $activity->activity_at;
 
-            $allPosts->transform(function ($post) use ($userActions) {
-                $actions = $userActions->get($post->id, collect());
+            return $feedItem;
+        })->filter(); // nullになったアイテム（削除された投稿など）を除外
 
-                $post->is_liked = $actions->contains('action_type', 'like');
-                $post->is_sparked = $actions->contains('action_type', 'spark');
-                $post->is_bookmarked = $actions->contains('action_type', 'bookmark');
+        // 7. ページネーションの結果を再構築して返す
+        $paginatedResult = new CursorPaginator($feedItems->values(), $timelineActivities->perPage(), $timelineActivities->cursor());
 
-                return $post;
-            });
-        }
-
-        return response()->json([
-            'data' => $allPosts->values(),
-            'meta' => [
-                'has_more' => $allPosts->count() >= 20
-            ]
-        ]);
+        return response()->json($paginatedResult);
     }
 
     private function getShortFeed(Request $request, $user)
@@ -528,127 +513,93 @@ class PostController extends Controller
 
     private function getRecommendFeed(Request $request, $user)
     {
-        // 1. 通常の投稿（ショートを除外）
-        $postsQuery = Post::with(['user', 'media', 'quotedPost.user', 'quotedPost.media', 'quotedReply.user', 'quotedReply.post.user'])
-            ->withCount(['likes', 'sparks', 'bookmarks', 'replies', 'quotes', 'views'])
-            ->where('content_type', '!=', 'short_video'); // ショートを除外
+        // 1. 公開されている「通常の投稿」を取得するクエリ
+        $postsQuery = DB::table('posts')
+            ->where('content_type', '!=', 'short_video')
+            ->where('view_permission', 'public'); // おすすめフィードは公開投稿のみ
 
-        // センシティブコンテンツのフィルタリング
+        // センシティブフィルタ
         if (!$user || !$this->isAdult($user)) {
             $postsQuery->where('is_sensitive', false);
         }
 
-        // 閲覧権限のフィルタリング
-        if ($user) {
-            $postsQuery->where(function ($q) use ($user) {
-                $q->where('view_permission', 'public')
-                    ->orWhere(function ($q) use ($user) {
-                        $q->where('view_permission', 'followers')
-                            ->whereHas('user.followers', function ($q) use ($user) {
-                                $q->where('follower_id', $user->id);
-                            });
-                    })
-                    ->orWhere(function ($q) use ($user) {
-                        $q->where('view_permission', 'mutuals')
-                            ->whereHas('user.followers', function ($q) use ($user) {
-                                $q->where('follower_id', $user->id);
-                            })
-                            ->whereHas('user.following', function ($q) use ($user) {
-                                $q->where('following_id', $user->id);
-                            });
-                    })
-                    ->orWhere('user_id', $user->id); // 自分の投稿
-            });
-        } else {
-            $postsQuery->where('view_permission', 'public');
+        $postsQuery->select(
+            'id as post_id',
+            DB::raw('NULL as repost_user_id'),
+            'created_at as activity_at'
+        );
+
+        // 2. 全ユーザーによる「スパーク」を取得するクエリ
+        $sparksQuery = DB::table('post_actions')
+            ->join('posts', 'post_actions.post_id', '=', 'posts.id')
+            ->where('post_actions.action_type', 'spark')
+            ->where('posts.content_type', '!=', 'short_video')
+            ->where('posts.view_permission', 'public');
+
+        // センシティブフィルタ
+        if (!$user || !$this->isAdult($user)) {
+            $sparksQuery->where('posts.is_sensitive', false);
         }
 
-        // 通常の投稿を取得
-        $posts = $postsQuery->orderBy('created_at', 'desc')->take(50)->get();
+        $sparksQuery->select(
+            'post_actions.post_id',
+            'post_actions.user_id as repost_user_id',
+            'post_actions.created_at as activity_at'
+        );
 
-        // 通常の投稿にリポスト情報を追加
-        foreach ($posts as $post) {
-            $post->is_repost = false;
-            $post->repost_user = null;
-            $post->repost_created_at = $post->created_at;
-        }
+        // 3. 2つのクエリを結合し、活動日時順に並べ替え、ページネーションを適用
+        $timelineActivities = $sparksQuery
+            ->union($postsQuery)
+            ->orderBy('activity_at', 'desc')
+            ->cursorPaginate(20);
 
-        // 2. スパークされた投稿を追加（重複を避けるため、元の投稿とは別のタイムラインエントリとして扱う）
-        $sparkedEntries = collect();
+        // 4. タイムラインの投稿IDとリポストユーザーIDを取得
+        $postIds = $timelineActivities->pluck('post_id')->unique()->toArray();
+        $repostUserIds = $timelineActivities->whereNotNull('repost_user_id')->pluck('repost_user_id')->unique()->toArray();
 
+        // 5. 必要なデータをまとめて取得
+        $postsById = Post::with(['user', 'media', 'quotedPost.user', 'quotedPost.media', 'quotedReply.user', 'quotedReply.post.user'])
+            ->withCount(['likes', 'sparks', 'bookmarks', 'replies', 'quotes', 'views'])
+            ->whereIn('id', $postIds)
+            ->get()
+            ->keyBy('id');
+
+        $repostUsersById = User::whereIn('id', $repostUserIds)->get()->keyBy('id');
+
+        $userActions = collect();
         if ($user) {
-            // 最近のスパークアクションを取得
-            $recentSparks = DB::table('post_actions')
-                ->join('posts', 'post_actions.post_id', '=', 'posts.id')
-                ->join('users', 'post_actions.user_id', '=', 'users.id')
-                ->where('post_actions.action_type', 'spark')
-                ->where('posts.content_type', '!=', 'short_video')
-                ->select(
-                    'posts.id as post_id',
-                    'post_actions.user_id as repost_user_id',
-                    'users.name as repost_user_name',
-                    'users.username as repost_user_username',
-                    'users.profile_image as repost_user_profile_image',
-                    'post_actions.created_at as repost_created_at'
-                )
-                ->orderBy('post_actions.created_at', 'desc')
-                ->take(50)
-                ->get();
-
-            foreach ($recentSparks as $spark) {
-                $post = Post::with(['user', 'media', 'quotedPost.user', 'quotedPost.media', 'quotedReply.user', 'quotedReply.post.user'])
-                    ->withCount(['likes', 'sparks', 'bookmarks', 'replies', 'quotes', 'views'])
-                    ->find($spark->post_id);
-
-                if ($post && $this->canViewPost($post, $user)) {
-                    $post->is_repost = true;
-                    $post->repost_user = (object) [
-                        'id' => $spark->repost_user_id,
-                        'name' => $spark->repost_user_name,
-                        'username' => $spark->repost_user_username,
-                        'profile_image' => $spark->repost_user_profile_image,
-                    ];
-                    $post->repost_created_at = $spark->repost_created_at;
-
-                    $sparkedEntries->push($post);
-                }
-            }
-        }
-
-        // 投稿とスパークエントリを統合してソート
-        $allPosts = $posts->concat($sparkedEntries)->sortByDesc(function ($post) {
-            return $post->is_repost ? $post->repost_created_at : $post->created_at;
-        })->take(20);
-
-        // ユーザーのアクション状態を効率的に取得
-        if ($user) {
-            $postIds = $allPosts->pluck('id')->toArray();
-
-            // 一括でアクション状態を取得
             $userActions = DB::table('post_actions')
                 ->where('user_id', $user->id)
                 ->whereIn('post_id', $postIds)
                 ->whereIn('action_type', ['like', 'spark', 'bookmark'])
-                ->select('post_id', 'action_type')
                 ->get()
                 ->groupBy('post_id');
-
-            $allPosts->transform(function ($post) use ($userActions) {
-                $actions = $userActions->get($post->id, collect());
-
-                $post->is_liked = $actions->contains('action_type', 'like');
-                $post->is_sparked = $actions->contains('action_type', 'spark');
-                $post->is_bookmarked = $actions->contains('action_type', 'bookmark');
-
-                return $post;
-            });
         }
 
-        return response()->json([
-            'data' => $allPosts->values(),
-            'meta' => [
-                'has_more' => $allPosts->count() >= 20
-            ]
-        ]);
+        // 6. 最終的なフィードデータを構築
+        $feedItems = $timelineActivities->map(function ($activity) use ($postsById, $repostUsersById, $userActions) {
+            $post = $postsById->get($activity->post_id);
+            if (!$post) {
+                return null;
+            }
+
+            $feedItem = clone $post;
+
+            $actions = $userActions->get($feedItem->id, collect());
+            $feedItem->is_liked = $actions->contains('action_type', 'like');
+            $feedItem->is_sparked = $actions->contains('action_type', 'spark');
+            $feedItem->is_bookmarked = $actions->contains('action_type', 'bookmark');
+
+            $feedItem->is_repost = !is_null($activity->repost_user_id);
+            $feedItem->repost_user = $feedItem->is_repost ? $repostUsersById->get($activity->repost_user_id) : null;
+            $feedItem->repost_created_at = $activity->activity_at;
+
+            return $feedItem;
+        })->filter();
+
+        // 7. ページネーションの結果を再構築して返す
+        $paginatedResult = new CursorPaginator($feedItems->values(), $timelineActivities->perPage(), $timelineActivities->cursor());
+
+        return response()->json($paginatedResult);
     }
 }
