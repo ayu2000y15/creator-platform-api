@@ -131,7 +131,7 @@ class PostController extends Controller
             ->where('content_type', '!=', 'short_video'); // ショートを除外
 
         // 通常の投稿を取得
-        $posts = $postsQuery->orderBy('created_at', 'desc')->take(20)->get();
+        $posts = $postsQuery->orderBy('created_at', 'desc')->take(50)->get();
 
         // 通常の投稿にリポスト情報を追加
         foreach ($posts as $post) {
@@ -159,7 +159,7 @@ class PostController extends Controller
                 'post_actions.created_at as repost_created_at'
             )
             ->orderBy('post_actions.created_at', 'desc')
-            ->take(10)
+            ->take(50)
             ->get();
 
         foreach ($recentSparks as $spark) {
@@ -564,7 +564,7 @@ class PostController extends Controller
         }
 
         // 通常の投稿を取得
-        $posts = $postsQuery->orderBy('created_at', 'desc')->take(20)->get();
+        $posts = $postsQuery->orderBy('created_at', 'desc')->take(50)->get();
 
         // 通常の投稿にリポスト情報を追加
         foreach ($posts as $post) {
@@ -592,7 +592,7 @@ class PostController extends Controller
                     'post_actions.created_at as repost_created_at'
                 )
                 ->orderBy('post_actions.created_at', 'desc')
-                ->take(10)
+                ->take(50)
                 ->get();
 
             foreach ($recentSparks as $spark) {
