@@ -3,11 +3,11 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Services\ImageUploadService;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Str;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Validation\ValidationException;
 
 class ProfileImageController extends Controller
 {
@@ -18,46 +18,44 @@ class ProfileImageController extends Controller
                 'image' => 'required|image|mimes:jpeg,png,jpg,gif,webp|max:5120', // 5MB
             ]);
 
+            /** @var \App\Models\User $user */
             $user = Auth::user();
             $image = $request->file('image');
 
-            // 古い画像を削除
-            $this->deleteOldProfileImage($user);
+            // Delete the existing profile image if it exists
+            if ($user->profile_image) {
+                ImageUploadService::deleteImage($user->profile_image, 'profile_images');
+            }
 
-            // ファイル名を生成
-            $filename = 'profile_' . $user->id . '_' . time() . '.' . $image->getClientOriginalExtension();
+            // Upload the new image
+            $uploadResult = ImageUploadService::uploadImage($image, 'profile_images');
 
-            // S3にファイルを保存 (ディスクを'profile_images'に指定)
-            // 'profile-images' ディレクトリに保存されます
-            $path = $image->storeAs('', $filename, 'profile_images');
+            if (!$uploadResult['success']) {
+                return response()->json([
+                    'status' => 'error',
+                    'message' => 'アップロードに失敗しました: ' . $uploadResult['error']
+                ], 500);
+            }
 
-            // S3のURLを取得
-            $imageUrl = Storage::disk('profile_images')->url($path);
-
-            $normalizedUrl = str_replace('%5C', '/', $imageUrl);
-
-            // ユーザーのプロフィール画像を更新
-            $user->update(['profile_image' => $normalizedUrl]);
-
-            Log::info('Profile image uploaded successfully to S3', [
-                'user_id' => $user->id,
-                'filename' => $filename,
-                'path' => $path,
-                'url' => $normalizedUrl
-            ]);
+            // Update the user's profile image with the URL
+            $user->update(['profile_image' => $uploadResult['url']]);
 
             return response()->json([
-                'message' => 'プロフィール画像をアップロードしました',
-                'image_url' => $normalizedUrl
+                'status' => 'success',
+                'message' => 'プロフィール画像を更新しました。',
+                'profile_image' => $uploadResult['url']
             ]);
+        } catch (ValidationException $e) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'バリデーションエラーが発生しました。',
+                'errors' => $e->errors()
+            ], 422);
         } catch (\Exception $e) {
-            Log::error('Profile image upload failed', [
-                'error' => $e->getMessage(),
-                'user_id' => Auth::id()
-            ]);
-
+            Log::error('Profile image upload failed: ' . $e->getMessage());
             return response()->json([
-                'message' => '画像のアップロードに失敗しました'
+                'status' => 'error',
+                'message' => 'プロフィール画像のアップロードに失敗しました。'
             ], 500);
         }
     }
@@ -65,57 +63,27 @@ class ProfileImageController extends Controller
     public function delete()
     {
         try {
+            /** @var \App\Models\User $user */
             $user = Auth::user();
 
-            // 古い画像を削除
-            $this->deleteOldProfileImage($user);
+            // Delete the existing profile image if it exists
+            if ($user->profile_image) {
+                ImageUploadService::deleteImage($user->profile_image, 'profile_images');
+            }
 
-            // ユーザーのプロフィール画像をクリア
+            // Clear the user's profile image
             $user->update(['profile_image' => null]);
 
-            Log::info('Profile image deleted successfully from S3', [
-                'user_id' => $user->id
-            ]);
-
             return response()->json([
-                'message' => 'プロフィール画像を削除しました'
+                'status' => 'success',
+                'message' => 'プロフィール画像を削除しました。'
             ]);
         } catch (\Exception $e) {
-            Log::error('Profile image deletion failed', [
-                'error' => $e->getMessage(),
-                'user_id' => Auth::id()
-            ]);
-
+            Log::error('Profile image deletion failed: ' . $e->getMessage());
             return response()->json([
-                'message' => '画像の削除に失敗しました'
+                'status' => 'error',
+                'message' => 'プロフィール画像の削除に失敗しました。'
             ], 500);
-        }
-    }
-
-    private function deleteOldProfileImage($user)
-    {
-        if ($user->profile_image) {
-            // S3の完全なURL (例: https://.../profile-images/image.jpg)
-            $fullUrlPath = parse_url($user->profile_image, PHP_URL_PATH);
-
-            // 先頭のスラッシュを削除してフルのパスを取得 (例: profile-images/image.jpg)
-            $fullPath = ltrim($fullUrlPath, '/');
-
-            // 'profile_images'ディスクのルートパス('profile-images/')を削除し、
-            // ファイル名のみの相対パスを取得する (例: image.jpg)
-            $relativePath = str_replace('profile-images/', '', $fullPath);
-
-            // 正しい相対パスでファイルの存在を確認
-            if (Storage::disk('profile_images')->exists($relativePath)) {
-
-                // ファイルを削除
-                Storage::disk('profile_images')->delete($relativePath);
-
-                Log::info('Old profile image deleted from S3', [
-                    'user_id' => $user->id,
-                    'path' => $relativePath
-                ]);
-            }
         }
     }
 }
