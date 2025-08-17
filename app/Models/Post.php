@@ -24,6 +24,7 @@ class Post extends Model
         'is_paid',
         'price',
         'introduction',
+        'views_count',
     ];
 
     protected $casts = [

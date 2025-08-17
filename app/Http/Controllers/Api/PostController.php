@@ -264,15 +264,35 @@ class PostController extends Controller
 
     public function show(Request $request, Post $post)
     {
-        $user = Auth::user();
+        // Sanctumガードを使用して認証状態を取得（オプション認証）
+        $user = Auth::guard('sanctum')->user();
+
+        // デバッグログ追加
+        Log::info('Post show request', [
+            'post_id' => $post->id,
+            'post_user_id' => $post->user_id,
+            'current_user_id' => $user ? $user->id : null,
+            'user_authenticated' => $user ? true : false,
+            'view_permission' => $post->view_permission,
+            'is_sensitive' => $post->is_sensitive,
+            'auth_header' => $request->header('Authorization') ? 'present' : 'missing'
+        ]);
 
         // 年齢確認
         if ($post->is_sensitive && (!$user || !$this->isAdult($user))) {
+            Log::info('Post blocked due to age restriction', ['post_id' => $post->id]);
             return response()->json(['message' => 'このコンテンツは18歳以上のみ閲覧可能です。'], 403);
         }
 
         // 閲覧権限確認
-        if (!$this->canViewPost($post, $user)) {
+        $canView = $this->canViewPost($post, $user);
+        Log::info('Permission check result', [
+            'post_id' => $post->id,
+            'can_view' => $canView,
+            'is_own_post' => $user && $post->user_id === $user->id
+        ]);
+
+        if (!$canView) {
             return response()->json(['message' => '閲覧権限がありません。'], 403);
         }
 
@@ -322,7 +342,7 @@ class PostController extends Controller
             'price' => 'nullable|integer|min:1',
             'introduction' => 'nullable|string',
             'media' => 'nullable|array|max:4',
-            'media.*' => 'file|mimes:jpeg,png,jpg,gif,mp4,mov|max:20480', // 20MB
+            'media.*' => 'file|mimes:jpeg,png,jpg,gif,mp4,mov|max:5242880', // 5GB
         ]);
 
         DB::beginTransaction();
@@ -478,17 +498,30 @@ class PostController extends Controller
 
     private function canViewPost(Post $post, ?User $user): bool
     {
+        Log::info('canViewPost called', [
+            'post_id' => $post->id,
+            'post_user_id' => $post->user_id,
+            'current_user_id' => $user ? $user->id : null,
+            'view_permission' => $post->view_permission
+        ]);
+
         switch ($post->view_permission) {
             case 'public':
+                Log::info('Public post - allowing access');
                 return true;
             case 'followers':
+                $isOwner = $user && $post->user_id === $user->id;
+                Log::info('Followers post', ['is_owner' => $isOwner]);
                 return $user && ($post->user_id === $user->id ||
                     $post->user->followers()->where('follower_id', $user->id)->exists());
             case 'mutuals':
+                $isOwner = $user && $post->user_id === $user->id;
+                Log::info('Mutuals post', ['is_owner' => $isOwner]);
                 return $user && ($post->user_id === $user->id ||
                     ($post->user->followers()->where('follower_id', $user->id)->exists() &&
                         $post->user->following()->where('following_id', $user->id)->exists()));
             default:
+                Log::info('Unknown view permission', ['permission' => $post->view_permission]);
                 return false;
         }
     }

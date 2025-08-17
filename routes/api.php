@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\PostController;
 use App\Http\Controllers\Api\PostActionController;
 use App\Http\Controllers\Api\PostViewController;
 use App\Http\Controllers\Api\ReplyController;
+use App\Http\Controllers\Api\UserStatsController;
 use App\Http\Controllers\UserController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
@@ -71,6 +72,9 @@ Route::middleware('auth:sanctum')->group(function () {
     // プロフィール関連のルートを追加
     Route::put('/user/profile', [AuthController::class, 'updateProfile']);
     Route::put('/user/password', [AuthController::class, 'changePassword']);
+
+    // ユーザー統計データ
+    Route::get('/user/stats', [UserStatsController::class, 'getUserStats']);
 
     // プロフィール画像関連
     Route::post('/user/profile-image', [ProfileImageController::class, 'upload']);

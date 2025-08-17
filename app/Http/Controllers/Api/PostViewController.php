@@ -21,11 +21,15 @@ class PostViewController extends Controller
         ])->first();
 
         if (!$existing) {
+            // 閲覧履歴を記録
             PostView::create([
                 'user_id' => $user->id,
                 'post_id' => $post->id,
                 'viewed_at' => now(),
             ]);
+
+            // 投稿のビュー数をインクリメント
+            $post->increment('views_count');
         }
 
         return response()->json(['message' => '閲覧履歴を記録しました。']);
