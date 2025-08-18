@@ -88,7 +88,7 @@ class PostActionController extends Controller
         ]);
 
         return response()->json([
-            'message' => 'スパークしました。',
+            'message' => '共有しました。',
             'is_sparked' => true,
             'sparks_count' => $post->sparks()->count()
         ]);

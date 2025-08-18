@@ -201,7 +201,7 @@ class ReplyController extends Controller
         // コメントのスパークをリポストとして投稿を作成
         $originalPost = $reply->post;
 
-        $repostContent = $reply->user->name . "さんのコメントをスパークしました\n\n「" . $reply->content . "」\n\n元の投稿：";
+        $repostContent = $reply->user->name . "さんのコメントを共有しました\n\n「" . $reply->content . "」\n\n元の投稿：";
 
         $repost = Post::create([
             'id' => Str::uuid(),
