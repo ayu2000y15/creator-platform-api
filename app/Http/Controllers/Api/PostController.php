@@ -32,7 +32,7 @@ class PostController extends Controller
         }
 
         if ($filter === 'recommend') {
-            // おすすめ：リポスト投稿も含める
+            // 全体：リポスト投稿も含める
             return $this->getRecommendFeed($request, $user);
         }
 
